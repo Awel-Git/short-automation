@@ -16,10 +16,14 @@ TOKEN_URI = "https://oauth2.googleapis.com/token"
 
 
 def main():
-    directory = Path(os.environ["SHORTS_OUTPUT_DIR"])
-    clips = [directory / f"short-{number:02d}.mp4" for number in range(1, 4)]
+    single_file = os.environ.get("SHORTS_INPUT_FILE")
+    if single_file:
+        clips = [Path(single_file)]
+    else:
+        directory = Path(os.environ["SHORTS_OUTPUT_DIR"])
+        clips = [directory / f"short-{number:02d}.mp4" for number in range(1, 4)]
     if not all(clip.is_file() and clip.stat().st_size > 0 for clip in clips):
-        raise ValueError("The three verified Shorts must be present before uploading.")
+        raise ValueError("The finished MP4 files must be present before uploading.")
 
     raw_token = os.environ.get("YOUTUBE_TOKEN_JSON")
     if not raw_token:
@@ -36,10 +40,11 @@ def main():
     with build("youtube", "v3", credentials=credentials, cache_discovery=False) as youtube:
         for number, clip in enumerate(clips, start=1):
             print(f"Uploading {clip.name}", flush=True)
+            title = os.environ.get("SHORTS_TITLE", "").strip()[:92] or f"Highlight {number}"
             upload = youtube.videos().insert(
                 part="snippet,status",
                 body={
-                    "snippet": {"title": f"Highlight {number} #Shorts", "categoryId": "22"},
+                    "snippet": {"title": f"{title} #Shorts", "categoryId": "22"},
                     "status": {"privacyStatus": "public"},
                 },
                 media_body=MediaFileUpload(str(clip), mimetype="video/mp4",

@@ -1,109 +1,53 @@
-name: NeonClipping Shorts
+name: Publish Finished NeonClipping Clip
 
 on:
   workflow_dispatch:
     inputs:
-      source_url:
-        description: Completed YouTube video or replay you have permission to use
-        type: string
-        default: 'https://www.youtube.com/watch?v=hwSg39yIBGU'
+      asset_id:
+        description: Finished MP4 asset ID from a NeonClipping draft release
         required: true
-      source_release:
-        description: Optional release tag containing source.mp4 (overrides the YouTube URL)
         type: string
-      publish:
-        description: Upload all three clips to the authorized YouTube channel as public
+      title:
+        description: YouTube title
+        type: string
+      dry_run:
+        description: Check the file without uploading to YouTube
         type: boolean
         default: false
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  render:
+  publish:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
-    env:
-      NEONCLIPPING_CPU: '1'
-      NEONCLIPPING_ENCODER: x264
-      NEONCLIPPING_NO_AUTOUPDATE: '1'
-      PYTHONUNBUFFERED: '1'
-
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - name: Install and verify dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-liberation fonts-noto-core
-          python -m pip install -r requirements.txt
-          python -m pip check
-          python -m yt_dlp --version
-          node --version
-          ffprobe -version
-          ffmpeg -v error -f lavfi -i color=size=64x64 -frames:v 1 \
-            -pix_fmt yuv420p -c:v libx264 -f null -
-          ffmpeg -hide_banner -h filter=ass | grep -F 'Render ASS subtitles'
-          python -c 'from faster_whisper import WhisperModel; from ytdl import js_runtimes; assert "node" in js_runtimes()'
-
-      - name: Run unit tests
-        run: python -m unittest discover -s tests -v
-
-      - name: Download source MP4 from this repository
-        if: inputs.source_release != ''
+      - name: Download finished clip
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_RELEASE: ${{ inputs.source_release }}
+          ASSET_ID: ${{ inputs.asset_id }}
         run: |
-          gh release download --repo "$GITHUB_REPOSITORY" --pattern source.mp4 \
-            --output "$RUNNER_TEMP/neon-source.mp4" -- "$SOURCE_RELEASE"
-
-      - name: Render and verify three Shorts
-        env:
-          SOURCE_URL: ${{ inputs.source_url }}
-          SOURCE_RELEASE: ${{ inputs.source_release }}
-          NEONCLIPPING_DATA_DIR: ${{ runner.temp }}/neonclipping-data
-        run: |
-          if [[ -n "$SOURCE_RELEASE" ]]; then
-            source_args=(--video-file "$RUNNER_TEMP/neon-source.mp4")
-          else
-            python scripts/neon_shorts.py --check-source "$SOURCE_URL"
-            source_args=(--source "$SOURCE_URL")
-          fi
-          python -m uvicorn app:app --host 127.0.0.1 --port 8770 > "$RUNNER_TEMP/neonclipping.log" 2>&1 &
-          server=$!
-          trap 'kill "$server" 2>/dev/null || true' EXIT
-          if ! python scripts/neon_shorts.py "$RUNNER_TEMP/neon-shorts" "${source_args[@]}"; then
-            tail -n 100 "$RUNNER_TEMP/neonclipping.log"
-            exit 1
-          fi
-
-      - name: Upload Shorts
-        uses: actions/upload-artifact@v4
+          [[ "$ASSET_ID" =~ ^[0-9]+$ ]]
+          gh api -H 'Accept: application/octet-stream' \
+            "repos/$GITHUB_REPOSITORY/releases/assets/$ASSET_ID" > "$RUNNER_TEMP/finished.mp4"
+          test -s "$RUNNER_TEMP/finished.mp4"
+          ffprobe -v error -select_streams v:0 -show_entries stream=codec_name \
+            -of csv=p=0 "$RUNNER_TEMP/finished.mp4" | grep -qx h264
+      - uses: actions/setup-python@v5
+        if: ${{ !inputs.dry_run }}
         with:
-          name: neonclipping-shorts
-          path: ${{ runner.temp }}/neon-shorts/*.mp4
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 7
-
-      - name: Install YouTube upload dependencies
-        if: inputs.publish
+          python-version: '3.11'
+      - name: Install YouTube uploader dependencies
+        if: ${{ !inputs.dry_run }}
         run: python -m pip install google-api-python-client google-auth-httplib2
-
-      - name: Publish to YouTube
-        if: inputs.publish
+      - name: Upload finished clip to YouTube
+        if: ${{ !inputs.dry_run }}
         env:
           YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
-          SHORTS_OUTPUT_DIR: ${{ runner.temp }}/neon-shorts
+          SHORTS_INPUT_FILE: ${{ runner.temp }}/finished.mp4
+          SHORTS_TITLE: ${{ inputs.title }}
         run: python scripts/publish_neon_shorts.py
