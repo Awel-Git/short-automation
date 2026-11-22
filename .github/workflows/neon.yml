@@ -8,6 +8,9 @@ on:
         type: string
         default: 'https://www.youtube.com/watch?v=hwSg39yIBGU'
         required: true
+      source_release:
+        description: Optional release tag containing source.mp4 (overrides the YouTube URL)
+        type: string
       publish:
         description: Upload all three clips to the authorized YouTube channel as public
         type: boolean
@@ -56,16 +59,31 @@ jobs:
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
 
+      - name: Download source MP4 from this repository
+        if: inputs.source_release != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RELEASE: ${{ inputs.source_release }}
+        run: |
+          gh release download --repo "$GITHUB_REPOSITORY" --pattern source.mp4 \
+            --output "$RUNNER_TEMP/neon-source.mp4" -- "$SOURCE_RELEASE"
+
       - name: Render and verify three Shorts
         env:
           SOURCE_URL: ${{ inputs.source_url }}
+          SOURCE_RELEASE: ${{ inputs.source_release }}
           NEONCLIPPING_DATA_DIR: ${{ runner.temp }}/neonclipping-data
         run: |
-          python scripts/neon_shorts.py --check-source "$SOURCE_URL"
+          if [[ -n "$SOURCE_RELEASE" ]]; then
+            source_args=(--video-file "$RUNNER_TEMP/neon-source.mp4")
+          else
+            python scripts/neon_shorts.py --check-source "$SOURCE_URL"
+            source_args=(--source "$SOURCE_URL")
+          fi
           python -m uvicorn app:app --host 127.0.0.1 --port 8770 > "$RUNNER_TEMP/neonclipping.log" 2>&1 &
           server=$!
           trap 'kill "$server" 2>/dev/null || true' EXIT
-          if ! python scripts/neon_shorts.py "$RUNNER_TEMP/neon-shorts" --source "$SOURCE_URL"; then
+          if ! python scripts/neon_shorts.py "$RUNNER_TEMP/neon-shorts" "${source_args[@]}"; then
             tail -n 100 "$RUNNER_TEMP/neonclipping.log"
             exit 1
           fi

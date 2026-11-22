@@ -78,6 +78,19 @@ def job_id(value):
     return value
 
 
+def upload_source(path):
+    response = subprocess.run(
+        ["curl", "--silent", "--show-error", "--fail-with-body", "--max-time", "300",
+         "--form", f"file=@{path};filename=source.mp4;type=video/mp4",
+         f"{BASE}/upload"],
+        capture_output=True, text=True, check=False,
+    )
+    if response.returncode != 0:
+        detail = response.stdout.strip() or response.stderr.strip()
+        raise RuntimeError(f"NeonClipping could not accept the MP4: {detail}")
+    return job_id(json.loads(response.stdout)["id"])
+
+
 def wait_for_clips(batch):
     deadline = time.monotonic() + 70 * 60
     last_stage = None
@@ -138,6 +151,7 @@ def main():
     parser.add_argument("output_dir", type=Path, nargs="?")
     parser.add_argument("--source", default=SOURCE)
     parser.add_argument("--check-source")
+    parser.add_argument("--video-file", type=Path)
     args = parser.parse_args()
     if args.check_source:
         check_source(source_url(args.check_source))
@@ -146,8 +160,9 @@ def main():
         parser.error("output_dir is required when rendering")
 
     wait_for_server()
+    source = {"id": upload_source(args.video_file)} if args.video_file else {"url": source_url(args.source)}
     batch = job_id(api("/make", {
-        "url": source_url(args.source),
+        **source,
         "count": COUNT,
         "min_len": 20,
         "max_len": 45,
